@@ -1,133 +1,119 @@
-// background.js
+// Global event store for all recorded events
+console.log("Background script loaded.");
+let eventStore = [];
 
-class AnalyticsDataManager {
-    constructor() {
-        this.dataMatrix = [];
-        this.initializeListeners();
-    }
+// Utility: Convert eventStore (array of objects) to CSV format
+function eventsToCSV(events) {
+    if (events.length === 0) return "";
 
-    initializeListeners() {
-        browser.runtime.onMessage.addListener((message, sender) => {
-            if (message.type === "batchEvent") {
-                this.processBatchEvents(message.events);
-            } else if (message.action === "download") {
-                this.saveDataToFile();
-            }
-        });
-    }
+    // Determine the union of keys in all events
+    const keysSet = new Set();
+    events.forEach((event) => {
+        Object.keys(event).forEach((key) => keysSet.add(key));
+    });
+    const keys = Array.from(keysSet);
 
-    processBatchEvents(events) {
-        events.forEach((event) => {
-            // Extract relevant data from each event
-            const row = this.formatEventData(event);
-            this.addDataRow(row);
-        });
-    }
+    // Create CSV header row
+    const header = keys.join(",");
 
-    formatEventData(event) {
-        const domain = new URL(event.url).hostname;
-        const timestamp = new Date(event.timestamp).toISOString();
+    // Map each event object to a CSV row
+    const rows = events.map((event) => {
+        return keys
+            .map((key) => {
+                let val = event[key] !== undefined ? event[key] : "";
+                // If the value is a string, escape double quotes and wrap in quotes
+                if (typeof val === "string") {
+                    val = '"' + val.replace(/"/g, '""') + '"';
+                }
+                // For objects (like coordinates), stringify them
+                else if (typeof val === "object" && val !== null) {
+                    val = '"' + JSON.stringify(val).replace(/"/g, '""') + '"';
+                }
+                return val;
+            })
+            .join(",");
+    });
 
-        // Base data all events will have
-        const baseData = [
-            timestamp,
-            domain,
-            event.type,
-            event.deviceType,
-            event.os,
-        ];
-
-        // Add specific data based on event type
-        switch (event.type) {
-            case "pageView":
-                return [...baseData, event.category, "", "", ""];
-            case "clickEvent":
-                return [
-                    ...baseData,
-                    "",
-                    event.action,
-                    `${event.coordinates.x},${event.coordinates.y}`,
-                    "",
-                ];
-            case "searchQuery":
-                return [...baseData, "", "", "", event.query];
-            case "pageExit":
-                return [
-                    ...baseData,
-                    "",
-                    "",
-                    "",
-                    `Time:${event.timeSpent},Scroll:${event.scrollDepth}`,
-                ];
-            default:
-                return [...baseData, "", "", "", ""];
-        }
-    }
-
-    addDataRow(row) {
-        this.dataMatrix.push(row);
-        // Keep last 1000 events
-        if (this.dataMatrix.length > 1000) {
-            this.dataMatrix.shift();
-        }
-    }
-
-    getHeaders() {
-        return [
-            "Timestamp",
-            "Domain",
-            "EventType",
-            "DeviceType",
-            "OS",
-            "Category",
-            "Action",
-            "Coordinates",
-            "AdditionalData",
-        ];
-    }
-
-    matrixToCSV(matrix) {
-        const headers = this.getHeaders();
-        const headerRow = headers.join(",");
-        const dataRows = matrix.map((row) =>
-            row
-                .map((cell) => {
-                    // Escape commas and quotes in cell values
-                    const cellStr = String(cell).replace(/"/g, '""');
-                    return cellStr.includes(",") ? `"${cellStr}"` : cellStr;
-                })
-                .join(",")
-        );
-
-        return [headerRow, ...dataRows].join("\n");
-    }
-
-    async saveDataToFile() {
-        try {
-            const csvContent = this.matrixToCSV(this.dataMatrix);
-            const blob = new Blob([csvContent], {
-                type: "text/csv;charset=utf-8",
-            });
-            const url = URL.createObjectURL(blob);
-
-            const timestamp = new Date().toISOString().split("T")[0];
-            const filename = `analytics_data_${timestamp}.csv`;
-
-            await browser.downloads.download({
-                url: url,
-                filename: filename,
-                saveAs: true,
-            });
-
-            console.log("Analytics data download initiated");
-
-            // Cleanup
-            URL.revokeObjectURL(url);
-        } catch (error) {
-            console.error("Failed to save analytics data:", error);
-        }
-    }
+    return [header, ...rows].join("\n");
 }
 
-// Initialize the analytics data manager
-const analyticsManager = new AnalyticsDataManager();
+// Save the eventStore data to a CSV file
+function saveDataToFile() {
+    const csvContent = eventsToCSV(eventStore);
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+
+    browser.downloads
+        .download({
+            url: url,
+            filename: "browsing_events.csv",
+            saveAs: true, // Prompts the user to choose the save location
+        })
+        .then(() => {
+            console.log("Download initiated.");
+            eventStore = []; // Clear the event store after downloading
+        })
+        .catch((err) => {
+            console.error("Download failed:", err);
+        });
+}
+
+// Test function: simulate some dummy events
+function runTest() {
+    console.log("Running test: Adding dummy events to the event store.");
+    const dummyEvent1 = {
+        sessionId: "test-session",
+        deviceType: "desktop",
+        os: "TestOS",
+        timestamp: Date.now(),
+        timeSinceLast: 0.5,
+        url: "https://example.com",
+        type: "pageView",
+        category: "TestCategory",
+        token: 999,
+    };
+
+    const dummyEvent2 = {
+        sessionId: "test-session",
+        deviceType: "desktop",
+        os: "TestOS",
+        timestamp: Date.now() + 1000,
+        timeSinceLast: 0.1,
+        url: "https://example.com/test",
+        type: "clickEvent",
+        action: "TestAction",
+        elementType: "BUTTON",
+        coordinates: { x: 0.5, y: 0.5 },
+    };
+
+    eventStore.push(dummyEvent1, dummyEvent2);
+    console.log(
+        "Dummy events added. Current eventStore length:",
+        eventStore.length
+    );
+    // Optionally trigger an immediate download of the test data
+    saveDataToFile();
+}
+
+// Listen for messages from content scripts and popup
+browser.runtime.onMessage.addListener((message, sender) => {
+    if (message.action === "download") {
+        // Download request from the popup: save the current event store in CSV format
+        saveDataToFile();
+    } else if (message.action === "test") {
+        // Run the test function if a test message is received
+        runTest();
+    } else if (message.type === "batchEvent" && Array.isArray(message.events)) {
+        // Append all events from the batch to the global event store
+        eventStore.push(...message.events);
+        console.log(
+            "Received batch of events:",
+            message.events.length,
+            "Total events:",
+            eventStore.length
+        );
+    } else {
+        // Log any other messages for debugging purposes
+        console.log("Received message:", message);
+    }
+});
